@@ -3,8 +3,11 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using Unity.Mathematics;
+using Unity.VisualScripting;
 using UnityEngine;
 using Random = UnityEngine.Random;
+using DG.Tweening;
+using Object = UnityEngine.Object;
 
 public enum GameState
 {
@@ -47,11 +50,34 @@ public class GameManager : Singleton<GameManager>
         switch (newState)
         {
             case GameState.GenerateLevel :
+                Debug.Log(state);
+                round = 0;
                 GenerateGrid();
                 break;
             
             case GameState.SpawningBlocks :
-                SpawnBlocks(round++ == 0 ? 1 : 2);  // 첫 라운드면 1개 아니면 2개 스폰
+                Debug.Log(state);
+                SpawnBlocks(round++ == 0 ? 2 : 1);  // 첫 라운드면 1개 아니면 2개 스폰
+                break;
+            
+            case GameState.WaitingInput :
+                Debug.Log(state);
+                break;
+            
+            case GameState.Moving :
+                Debug.Log(state);
+                break;
+            
+            case GameState.Win :
+                Debug.Log(state);
+                Debug.Log("You Win");
+                //TODO : 승리 UI
+                break;
+            
+            case GameState.Lose :
+                Debug.Log(state);
+                Debug.Log("You Lose");
+                //TODO : 패배 UI
                 break;
             
         }
@@ -67,12 +93,27 @@ public class GameManager : Singleton<GameManager>
         {
             return;
         }
+
+        if (Input.GetKeyDown(KeyCode.LeftArrow))
+        {
+            MoveBlock(Vector2.left);
+        }
+        if (Input.GetKeyDown(KeyCode.RightArrow))
+        {
+            MoveBlock(Vector2.right);
+        }
+        if (Input.GetKeyDown(KeyCode.UpArrow))
+        {
+            MoveBlock(Vector2.up);
+        }
+        if (Input.GetKeyDown(KeyCode.DownArrow))
+        {
+            MoveBlock(Vector2.down);
+        }
     }
     
     private void GenerateGrid()
     {
-        round = 0;
-        
         nodes = new List<Node>();
         blocks = new List<Block>();
         
@@ -137,5 +178,82 @@ public class GameManager : Singleton<GameManager>
         
         // blocks 리스트에 있는 어떤 블록이 목표 랭크에 달성하면 이김 아니면 입력 대기
         ChangeState(blocks.Any(b => b.rank == winCondition) ? GameState.Win : GameState.WaitingInput);
+    }
+
+    private void MoveBlock(Vector2 direction)
+    {
+        ChangeState(GameState.Moving);
+
+        List<Block> blockOrder = blocks.OrderBy(n => n.Pos.y).ThenBy(n => n.Pos.x).ToList();
+
+        if (direction == Vector2.up || direction == Vector2.left)
+        {
+            blockOrder.Reverse();
+        }
+
+        foreach (var block in blockOrder)
+        {
+            Node next = block.node;
+
+            do
+            {
+                block.SetBlock(next);
+                
+                // 이동 방향의 다른 위치에 노드가 있는지 확인
+                Node possibleNode = GetNodeAtPosition(next.POS + direction, nodes);
+
+                if (possibleNode != null)
+                {
+                    // 병합 가능한 블록이 있는지 확인하고 병합
+                    if (possibleNode.useBlock != null && possibleNode.useBlock.CanMerge(block.rank))
+                    {
+                        block.MergeBlock(possibleNode.useBlock);
+                    }
+                    else if (possibleNode.useBlock == null)
+                    {
+                        next = possibleNode;
+                    }
+                }
+            } while (next != block.node);   // 더 이상 이동할 수 없을 때까지 반복
+        }
+        
+        // DOTween 시퀀스
+        var sequence = DOTween.Sequence();
+
+        foreach (var block in blockOrder)
+        {
+            // 병합된 블록이 있는 경우 병합된 위치로 이동
+            var movePoint = block.mergeBlock != null ? block.mergeBlock.node.POS : block.node.POS;
+
+            sequence.Insert(0, block.transform.DOMove(movePoint, animationTime));
+        }
+
+        sequence.OnComplete(() =>
+        {
+            foreach (var block in blockOrder.Where(b => b.mergeBlock != null))
+            {
+                // 병합된 새로운 블록 생성
+                SpawnBlock(block.mergeBlock.node, block.mergeBlock.rank + 1); // rank++은 안되고 +1은 된다?
+                
+                // 병합된 기존 블록 제거
+                RemoveBlock(block.mergeBlock, blocks);
+                RemoveBlock(block, blocks);
+            }
+            
+            ChangeState(GameState.SpawningBlocks);
+        });
+
+    }
+
+    private void RemoveBlock(Block block, List<Block> blocks)
+    {
+        blocks.Remove(block);
+        Object.Destroy(block.gameObject);
+    }
+
+    private Node GetNodeAtPosition(Vector2 pos, List<Node> nodes)
+    {
+        // 해당 위치와 일치하는 첫 번째 노드 반환
+        return nodes.FirstOrDefault(n => n.POS == pos);
     }
 }
